@@ -159,7 +159,7 @@ def param_init_lstm(options, params, prefix='lstm'):
                            ortho_weight(options['dim_proj']),
                            ortho_weight(options['dim_proj'])], axis=1)
     params[_p(prefix, 'W')] = W
-    # U.shape = (ndim,4dim) U.ndim=2 U是2维矩阵
+    # U.shape = (dim,4dim) U.ndim=2 U是2维矩阵
     U = numpy.concatenate([ortho_weight(options['dim_proj']),
                            ortho_weight(options['dim_proj']),
                            ortho_weight(options['dim_proj']),
@@ -202,7 +202,7 @@ def lstm_layer(tparams, state_below, options, prefix='lstm', mask=None):
         c = tensor.tanh(_slice(preact, 3, options['dim_proj']))  # cell
 
         c = f * c_ + i * c
-        # [:,None] 表示在列上升一维，
+        # [:,None] 表示“行数组”升一维变为“列向量”
         c = m_[:, None] * c + (1. - m_)[:, None] * c_ #c_代表初始时刻或上一时刻
 
         # 每个Step里，h结果是一个2D矩阵，[BatchSize，Emb_Dim]
@@ -210,7 +210,7 @@ def lstm_layer(tparams, state_below, options, prefix='lstm', mask=None):
         h = m_[:, None] * h + (1. - m_)[:, None] * h_  # h_是h的上一时刻或toutputs_info中的初始时刻的值
 
         return h, c  # 输出值对应着outputs_info中的元素
-        # scan函数最终的return时，2维矩阵序列还原为三维矩阵，向量序列还原为2维矩阵，即scan函数的输出结果会增加1D
+        # scan函数最终的return时，2维矩阵序列还原为三维矩阵，向量序列还原为2维矩阵，即scan函数的输出结果会增加1-D
 
     state_below = (tensor.dot(state_below, tparams[_p(prefix, 'W')]) +
                    tparams[_p(prefix, 'b')])  # 3维矩阵 乘 2维矩阵仍是3维矩阵，无须每一个Step做一次Wx+b，而是把所有Step的Wx一次性预计算好了
@@ -399,34 +399,39 @@ def build_model(tparams, options):
     # Used for dropout.
     use_noise = theano.shared(numpy_floatX(0.))
 
-    x = tensor.matrix('x', dtype='int64')  # 矩阵x的每个行向量（横向）是句子，行向量中的每个元素是单词序列即（一组batch）
+    x = tensor.matrix('x', dtype='int64')  # 词矩阵x是文字方向在竖式伸展，并列拼成一组batch
+    n_timesteps = x.shape[0]  # 行数即最长句子里单词的个数(即LSTM时序输入的个数)，（矩阵有多少列）
+    n_samples = x.shape[1]  # n_samples是一组batch里并行的句子个数_，
+    # 对应语言模型的序列学习算法，每个Step就相当于取一个句子的一个词。
+    # x每次scan取的一排词，称为examples，数量等于batch_size。
+
     mask = tensor.matrix('mask', dtype=config.floatX)
     y = tensor.vector('y', dtype='int64')
 
-    n_timesteps = x.shape[0]  # 句子的个数，（矩阵有多少行）
-    n_samples = x.shape[1]  # n_samples是句子中单词的个数(即LSTM时序输入的个数)
-
     # tparams['Wemb']是纵向存储词表的单词、横向存储“词向量”的theano矩阵
     # x.flatten()后是个一维numpy.array序列
-    emb = tparams['Wemb'][x.flatten()].reshape([n_timesteps,  # 第3维，决定了有几个子矩阵（有几个句子就有3维矩阵的几层）
-                                                n_samples,  # 子矩阵的行数（=句中单词的个数）
+    emb = tparams['Wemb'][x.flatten()].reshape([n_timesteps,  # 第3维，决定了有几个子矩阵（有几个单词序列就有3维矩阵的几层）
+                                                n_samples,  # 子矩阵的行数（=batch的个数）
                                                 options['dim_proj']])  # 词向量的维度或并行LSTM Block的个数
-                                                # reshape成三维矩阵，三维矩阵的每一层代表一个句子
+                                                # reshape成三维矩阵，三维矩阵的每一层代表一组batch的词向量
     # emb对应lstm_layer中的state_below
 
-    #      get_layer(options['encoder'])[1]即函数名称：lstm_layer，返回值是LSTM的h
+    #      get_layer(options['encoder'])[1]即函数名称：lstm_layer，返回值是LSTM的h [n_timestep, BatchSize，Emb_Dim]
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
                                             prefix=options['encoder'],
                                             mask=mask)
     if options['encoder'] == 'lstm':
-        proj = (proj * mask[:, :, None]).sum(axis=0)
-        proj = proj / mask.sum(axis=0)[:, None]
+        proj = (proj * mask[:, :, None]).sum(axis=0)  # 括号内是 3维矩阵.*3维列向量 = 3维矩阵，sum参数中“axis=0”代表在“最高维”轴的方向求和，维度降为了2维单层矩阵（求和“象征”着所有单词特征“压扁”为句子特征）
+        proj = proj / mask.sum(axis=0)[:, None]  # 2维单层矩阵./2维单层列向量 = 2维单层矩阵 mean pooling
     if options['use_dropout']:
         proj = dropout_layer(proj, use_noise, trng)
 
     pred = tensor.nnet.softmax(tensor.dot(proj, tparams['U']) + tparams['b'])
+    # proj是[BatchSize, dim]，U是[dim,4dim] ，相乘后是[BatchSize,4dim]  b是[1,4dim]，由于broadcast机制 b加在了每一行上
 
-    f_pred_prob = theano.function([x, mask], pred, name='f_pred_prob')
+
+    # 将上面所有表达式整合在theano函数中，输入值是 词矩阵x和Mask矩阵 输出值是pred矩阵
+    f_pred_prob = theano.function([x, mask], pred, name='f_pred_prob') # 计算出概率的函数对象
     f_pred = theano.function([x, mask], pred.argmax(axis=1), name='f_pred')
 
     off = 1e-8
@@ -435,7 +440,7 @@ def build_model(tparams, options):
     # pred是二维矩阵，cost也是2维矩阵
     cost = -tensor.log(pred[tensor.arange(n_samples), y] + off).mean()
 
-    return use_noise, x, mask, y, f_pred_prob, f_pred, cost # 返回值后三个是theano函数对象
+    return use_noise, x, mask, y, f_pred_prob, f_pred, cost
 
 
 def pred_probs(f_pred_prob, prepare_data, data, iterator, verbose=False):
