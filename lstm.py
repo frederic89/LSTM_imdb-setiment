@@ -103,9 +103,11 @@ def init_params(options): # dict作为输入，options转化为params
                                               prefix=options['encoder'])
     # classifier
     #初始化Softmax输出层参数（Emb_Dim，2）
+    # ydim = #{0,1} = 2 确定是几类分类问题，imdb测试集是2分类问题
     params['U'] = 0.01 * numpy.random.randn(options['dim_proj'],
                                             options['ydim']).astype(config.floatX)
     params['b'] = numpy.zeros((options['ydim'],)).astype(config.floatX)
+    #这个U不是lstm_U,而是分类器的U，b也不是lstm_b
 
     return params
 
@@ -192,7 +194,7 @@ def lstm_layer(tparams, state_below, options, prefix='lstm', mask=None):
     def _step(m_, x_, h_, c_):
         # x_是形参，下面的state_below是实参
         # _step中的四个形参： x_是state_below降为二维矩阵形成的序列，m_是mask降为1维“行”向量的序列
-        preact = tensor.dot(h_, tparams[_p(prefix, 'U')])  # 新的h_与lstm_U矩阵相乘，使得f、o、c均不为零，其中f、o是中间变量
+        preact = tensor.dot(h_, tparams[_p(prefix, 'U')])  # 每次新的h_与lstm_U矩阵相乘，使得f、o、c均不再为零，其中f、o是中间变量
         preact += x_  # 2维矩阵序列(x_) + 2维矩阵 = 2维矩阵序列
 
         # 每一个preact矩阵序列 的4块并列子矩阵 进行切片分块运算
@@ -426,18 +428,18 @@ def build_model(tparams, options):
     if options['use_dropout']:
         proj = dropout_layer(proj, use_noise, trng)
 
+    # proj的维度是(BatchSize,Emb_Dim)，U是（Emb_Dim,2）,点乘得到(BatchSize,2)，加上偏置b
+    # 2是classifier中输出分类标签的个数（y_dim）
     pred = tensor.nnet.softmax(tensor.dot(proj, tparams['U']) + tparams['b'])
-    # proj是[BatchSize, dim]，U是[dim,4dim] ，相乘后是[BatchSize,4dim]  b是[1,4dim]，由于broadcast机制 b加在了每一行上
 
-
-    # 将上面所有表达式整合在theano函数中，输入值是 词矩阵x和Mask矩阵 输出值是pred矩阵
+    # 将上面所有表达式整合在theano函数中，输入值是词矩阵x和Mask矩阵 输出值是pred矩阵
     f_pred_prob = theano.function([x, mask], pred, name='f_pred_prob') # 计算出概率的函数对象
     f_pred = theano.function([x, mask], pred.argmax(axis=1), name='f_pred')
 
     off = 1e-8
     if pred.dtype == 'float16':
         off = 1e-6
-    # pred是二维矩阵，cost也是2维矩阵
+    # imdb分类中，pred是(BatchSize,2)  所以pred矩阵中的[tensor.arange(n_samples), y]位置是具体分类标签结果
     cost = -tensor.log(pred[tensor.arange(n_samples), y] + off).mean()
 
     return use_noise, x, mask, y, f_pred_prob, f_pred, cost
