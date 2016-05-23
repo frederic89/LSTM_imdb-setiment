@@ -1,6 +1,8 @@
+# coding=utf-8
 from __future__ import print_function
-from six.moves import xrange
+# from six.moves import xrange
 import six.moves.cPickle as pickle
+# import pickle
 
 import gzip
 import os
@@ -18,7 +20,7 @@ def prepare_data(seqs, labels, maxlen=None):
     if maxlen is set, we will cut all sequence to this maximum
     lenght.
 
-    This swap the axis!
+    This swap the axis! 句子文字纵向排列
     """
     # x: a list of sentences
     lengths = [len(s) for s in seqs] # seqs是输入token组成的数组， lengths是每个token的长度组成的数组
@@ -40,7 +42,7 @@ def prepare_data(seqs, labels, maxlen=None):
             return None, None, None
 
     n_samples = len(seqs)  # token的个数量
-    maxlen = numpy.max(lengths)  #token的
+    maxlen = numpy.max(lengths)
 
     x = numpy.zeros((maxlen, n_samples)).astype('int64')
     x_mask = numpy.zeros((maxlen, n_samples)).astype(theano.config.floatX)

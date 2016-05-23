@@ -1,8 +1,8 @@
-import cPickle
+import pickle
 
 file = open('imdb.pkl', 'rb')
-train_set = cPickle.load(file)
-test_set = cPickle.load(file)
+train_set = pickle.load(file)
+test_set = pickle.load(file)
 
 print(train_set[0][0])
 print("========")

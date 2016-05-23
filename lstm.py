@@ -50,7 +50,8 @@ def get_minibatches_idx(n, minibatch_size, shuffle=False):
         # Make a minibatch out of what is left
         minibatches.append(idx_list[minibatch_start:])
 
-    return zip(range(len(minibatches)), minibatches)  #返回一个zip(batch索引，batch内容)，用于运行。每份batch是一个列表，包含句子的索引。
+    return zip(range(len(minibatches)), minibatches)  #返回一个二元序列(序号，batch索引号)，用于运行。每个批次号，包含句子的索引。
+    # batch的索引号是全集唯一的
 
 
 def get_dataset(name):
@@ -403,7 +404,7 @@ def build_model(tparams, options):
 
     x = tensor.matrix('x', dtype='int64')  # 词矩阵x是文字方向在竖式伸展，并列拼成一组batch
     n_timesteps = x.shape[0]  # 行数即最长句子里单词的个数(即LSTM时序输入的个数)，（矩阵有多少列）
-    n_samples = x.shape[1]  # n_samples是一组batch里并行的句子个数_，
+    n_samples = x.shape[1]  # n_samples是一组batch里并行的句子个数，
     # 对应语言模型的序列学习算法，每个Step就相当于取一个句子的一个词。
     # x每次scan取的一排词，称为examples，数量等于batch_size。
 
@@ -433,13 +434,14 @@ def build_model(tparams, options):
     pred = tensor.nnet.softmax(tensor.dot(proj, tparams['U']) + tparams['b'])
 
     # 将上面所有表达式整合在theano函数中，输入值是词矩阵x和Mask矩阵 输出值是pred矩阵
-    f_pred_prob = theano.function([x, mask], pred, name='f_pred_prob') # 计算出概率的函数对象
-    f_pred = theano.function([x, mask], pred.argmax(axis=1), name='f_pred')
+    f_pred_prob = theano.function([x, mask], pred, name='f_pred_prob') # 定义计算推测概率的函数
+    f_pred = theano.function([x, mask], pred.argmax(axis=1), name='f_pred')  # 定义计算推测分类的函数
 
     off = 1e-8
     if pred.dtype == 'float16':
         off = 1e-6
     # imdb分类中，pred是(BatchSize,2)  所以pred矩阵中的[tensor.arange(n_samples), y]位置是具体分类标签结果
+    # cost结果
     cost = -tensor.log(pred[tensor.arange(n_samples), y] + off).mean()
 
     return use_noise, x, mask, y, f_pred_prob, f_pred, cost
@@ -474,6 +476,8 @@ def pred_error(f_pred, prepare_data, data, iterator, verbose=False):
     f_pred: Theano fct computing the prediction
     prepare_data: usual prepare_data for that dataset.
     """
+    # batch的索引号是全集唯一的， data是全集，而iterator是形成batch的抽象结果
+
     valid_err = 0
     for _, valid_index in iterator:
         x, mask, y = prepare_data([data[0][t] for t in valid_index],
@@ -517,7 +521,7 @@ def train_lstm(
     model_options = locals().copy()
     print("model options", model_options)
 
-    load_data, prepare_data = get_dataset(dataset)  #链接到imdb.py中定义的函数
+    load_data, prepare_data = get_dataset(dataset)  # 链接到imdb.py中定义的函数
 
     print('Loading data')
     train, valid, test = load_data(n_words=n_words, valid_portion=0.05,
@@ -577,7 +581,7 @@ def train_lstm(
     print("%d valid examples" % len(valid[0]))
     print("%d test examples" % len(test[0]))
 
-    history_errs = []
+    history_errs = []  # 保存结果的数组
     best_p = None
     bad_count = 0
 
@@ -594,20 +598,21 @@ def train_lstm(
             n_samples = 0
 
             # Get new shuffled index for the training set.
-            kf = get_minibatches_idx(len(train[0]), batch_size, shuffle=True)
+            kf = get_minibatches_idx(len(train[0]), batch_size, shuffle=True)  # 返回一个二元序列(序号，batch索引号)，batch索引号即下文的train_index
 
             for _, train_index in kf:
                 uidx += 1
                 use_noise.set_value(1.)
 
                 # Select the random examples for this minibatch
+                # 重新定义x，y为列表；x是一组batch的句子，y则是该batch集的标签
                 y = [train[1][t] for t in train_index]
                 x = [train[0][t] for t in train_index]
 
                 # Get the data in numpy.ndarray format
                 # This swap the axis!
                 # Return something of shape (minibatch maxlen, n samples)
-                x, mask, y = prepare_data(x, y)
+                x, mask, y = prepare_data(x, y)   # 再次赋值x为词矩阵，并已经转为theano变量
                 n_samples += x.shape[1]  # This swap the axis!
 
                 cost = f_grad_shared(x, mask, y)
