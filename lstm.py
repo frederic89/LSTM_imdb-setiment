@@ -297,6 +297,7 @@ def adadelta(lr, tparams, grads, x, mask, y, cost):
     .. [ADADELTA] Matthew D. Zeiler, *ADADELTA: An Adaptive Learning
        Rate Method*, arXiv:1212.5701.
     """
+    # tparams是待训练的参数矩阵，此处定义的是众多带学习参数的更新矩阵
 
     zipped_grads = [theano.shared(p.get_value() * numpy_floatX(0.),
                                   name='%s_grad' % k)
@@ -565,12 +566,12 @@ def train_lstm(
 
     f_cost = theano.function([x, mask, y], cost, name='f_cost')
 
-    grads = tensor.grad(cost, wrt=list(tparams.values()))
+    grads = tensor.grad(cost, wrt=list(tparams.values()))  # tparams是个OrderedDict字典
     f_grad = theano.function([x, mask, y], grads, name='f_grad')
 
     lr = tensor.scalar(name='lr')
     f_grad_shared, f_update = optimizer(lr, tparams, grads,
-                                        x, mask, y, cost)
+                                        x, mask, y, cost) # 更新学习参数
 
     print('Optimization')
 
